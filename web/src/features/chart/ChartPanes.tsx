@@ -6,12 +6,12 @@ export type ChartLayout = "overlay" | "stacked";
 
 /**
  * Overlay puts every channel on one plot - right for comparing shapes and
- * spotting relationships. Stacked gives each channel its own pane and its own
- * Y scale - right when the values differ by orders of magnitude, which is the
- * usual case across subsystems.
+ * spotting relationships. Split gives each channel its own pane and Y scale -
+ * right when values differ by orders of magnitude, which is usual across
+ * subsystems.
  *
- * A saved telemetry group is just a named set of channels plus this layout, so
- * the panes here are what a group renders as when groups are wired up.
+ * A saved telemetry group is a named set of channels plus this arrangement, so
+ * these panes are what a group renders as once groups are wired up.
  */
 export function ChartPanes({
   series,
@@ -21,7 +21,10 @@ export function ChartPanes({
   bandMode,
   showLine,
   axisFor,
+  clearToken = 0,
+  resetZoomToken = 0,
   onBrush,
+  onZoomChange,
 }: {
   series: Series[];
   labels: Label[];
@@ -30,12 +33,18 @@ export function ChartPanes({
   bandMode: BandMode;
   showLine: boolean;
   axisFor: Record<string, 0 | 1>;
+  clearToken?: number;
+  resetZoomToken?: number;
   onBrush?: (start: Date, end: Date) => void;
+  onZoomChange?: (zoomed: boolean) => void;
 }) {
   if (!series.length) {
     return (
-      <div className="muted" style={{ padding: 24 }}>
-        no data loaded
+      <div className="empty-state">
+        <div className="empty-title">No channels selected</div>
+        <div className="muted">
+          Pick a subsystem on the left, then choose channels to plot.
+        </div>
       </div>
     );
   }
@@ -49,7 +58,10 @@ export function ChartPanes({
         bandMode={bandMode}
         showLine={showLine}
         axisFor={axisFor}
+        clearToken={clearToken}
+        resetZoomToken={resetZoomToken}
         onBrush={onBrush}
+        onZoomChange={onZoomChange}
       />
     );
   }
@@ -72,6 +84,7 @@ export function ChartPanes({
               colorOffset={index}
               compact
               showCaption={false}
+              clearToken={clearToken}
               onBrush={onBrush}
             />
           </div>

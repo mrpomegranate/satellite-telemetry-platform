@@ -37,6 +37,12 @@ function fmt(value: number | null | undefined, units?: string | null): string {
   return units ? `${rounded} ${units}` : String(rounded);
 }
 
+type Prepared = {
+  point: Series["points"][number];
+  when: string;
+  until: string;
+};
+
 export function TelemetryChart({
   series,
   labels,
@@ -47,21 +53,26 @@ export function TelemetryChart({
   colorOffset = 0,
   compact = false,
   showCaption = true,
+  clearToken = 0,
+  resetZoomToken = 0,
   onBrush,
+  onZoomChange,
 }: {
   series: Series[];
   labels: Label[];
   theme: Theme;
   bandMode?: BandMode;
-  /** Hide the mean line to inspect the envelope alone. */
   showLine?: boolean;
   axisFor?: Record<string, 0 | 1>;
-  /** Keeps colours stable when several charts each render one channel. */
   colorOffset?: number;
-  /** Tighter chrome for stacked panes. */
   compact?: boolean;
   showCaption?: boolean;
+  /** Increment to clear any drawn selection region. */
+  clearToken?: number;
+  /** Increment to reset the zoom window to full extent. */
+  resetZoomToken?: number;
   onBrush?: (start: Date, end: Date) => void;
+  onZoomChange?: (zoomed: boolean) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -69,11 +80,23 @@ export function TelemetryChart({
   const bucketSeconds = series[0]?.bucket_seconds ?? null;
   const isAggregate = bucketSeconds != null;
 
+  // Timestamps are formatted once here, not on every mouse move. Doing this in
+  // the tooltip formatter is the single biggest hover cost.
   const lookup = useMemo(() => {
-    const map = new Map<string, Map<number, Series["points"][number]>>();
+    const map = new Map<string, Map<number, Prepared>>();
     series.forEach((s) => {
-      const inner = new Map<number, Series["points"][number]>();
-      s.points.forEach((p) => inner.set(new Date(p.t).getTime(), p));
+      const span = (s.bucket_seconds ?? 0) * 1000;
+      const inner = new Map<number, Prepared>();
+      s.points.forEach((p) => {
+        const ms = new Date(p.t).getTime();
+        inner.set(ms, {
+          point: p,
+          when: new Date(ms).toISOString().replace("T", " ").slice(0, 16),
+          until: span
+            ? new Date(ms + span).toISOString().replace("T", " ").slice(11, 16)
+            : "",
+        });
+      });
       map.set(s.channel_id, inner);
     });
     return map;
@@ -102,7 +125,9 @@ export function TelemetryChart({
     const muted = cssVar("--muted", "#9c9a92");
     const text = cssVar("--text", "#e8e6dc");
     const panel = cssVar("--panel", "#1c1c17");
+    const panel2 = cssVar("--panel-2", "#232320");
     const border = cssVar("--border", "#2e2e28");
+    const accent = cssVar("--accent", "#c96442");
 
     const dataSeries: echarts.SeriesOption[] = [];
     const colorOf = new Map<string, string>();
@@ -119,9 +144,8 @@ export function TelemetryChart({
         s.points.some((p) => p[lowKey] !== null && p[highKey] !== null);
 
       if (hasBand) {
-        // stackStrategy "all" is essential: telemetry crosses zero, and the
-        // default strategy stacks negatives and positives separately, which
-        // pins the band's floor to zero instead of to value_min.
+        // stackStrategy "all" keeps the floor at value_min even when negative;
+        // the default splits signs and pins the band to zero.
         dataSeries.push({
           name: `${s.mnemonic} __floor`,
           type: "line",
@@ -134,6 +158,8 @@ export function TelemetryChart({
           silent: true,
           tooltip: { show: false },
           legendHoverLink: false,
+          animation: false,
+          sampling: "lttb",
           z: 1,
         });
         dataSeries.push({
@@ -153,6 +179,8 @@ export function TelemetryChart({
           silent: true,
           tooltip: { show: false },
           legendHoverLink: false,
+          animation: false,
+          sampling: "lttb",
           z: 1,
         });
       }
@@ -162,15 +190,15 @@ export function TelemetryChart({
         type: "line",
         yAxisIndex: axis,
         data: s.points.map((p) => [p.t, p.v]),
-        symbol: "none",
+        symbol: "circle",
+        symbolSize: 6,
+        showSymbol: false, // only the hovered point gets a marker
         sampling: "lttb",
-        lineStyle: {
-          width: 1.4,
-          color,
-          opacity: showLine ? 1 : 0,
-        },
+        lineStyle: { width: 1.4, color, opacity: showLine ? 1 : 0 },
         itemStyle: { color },
+        emphasis: { scale: 1.6, focus: "none" },
         connectNulls: false,
+        animation: false,
         z: 3,
         markArea:
           index === 0 && labels.length
@@ -192,7 +220,6 @@ export function TelemetryChart({
 
     const usesRight = Object.values(axisFor).includes(1);
 
-    // Units come from catalog.channel.units; say so plainly when absent.
     function axisName(index: 0 | 1): string {
       const onAxis = series.filter((s) => (axisFor[s.channel_id] ?? 0) === index);
       if (!onAxis.length) return "";
@@ -207,67 +234,72 @@ export function TelemetryChart({
       const stamp = list[0]?.axisValue;
       if (stamp == null) return "";
       const ms = new Date(stamp).getTime();
-      const startText = new Date(ms).toISOString().replace("T", " ").slice(0, 16);
 
-      let html = `<div style="font-weight:500;margin-bottom:2px">${startText} UTC</div>`;
-      if (isAggregate) {
-        const endText = new Date(ms + bucketSeconds! * 1000)
-          .toISOString()
-          .replace("T", " ")
-          .slice(11, 16);
+      const first = lookup.get(series[0]?.channel_id ?? "")?.get(ms);
+      let html = `<div style="font-weight:500">${first?.when ?? ""} UTC</div>`;
+      if (isAggregate && first?.until) {
         html +=
-          `<div style="color:${muted};font-size:11px;margin-bottom:6px">` +
-          `covers ${describeBucket(bucketSeconds)} \u2192 ${endText}</div>`;
+          `<div style="color:${muted};font-size:11px;margin-bottom:4px">` +
+          `covers ${describeBucket(bucketSeconds)} \u2192 ${first.until}</div>`;
       }
 
       series.forEach((s) => {
-        const point = lookup.get(s.channel_id)?.get(ms);
-        if (!point) return;
+        const prepared = lookup.get(s.channel_id)?.get(ms);
+        if (!prepared) return;
+        const p = prepared.point;
         const color = colorOf.get(s.channel_id) ?? "#888";
         html +=
-          `<div style="margin-top:6px"><span style="display:inline-block;` +
+          `<div style="margin-top:5px"><span style="display:inline-block;` +
           `width:8px;height:8px;border-radius:2px;background:${color};` +
           `margin-right:6px"></span>${s.mnemonic}</div>`;
 
         if (!isAggregate) {
-          html += `<div style="margin-left:14px">value ${fmt(point.v, s.units)}</div>`;
+          html += `<div style="margin-left:14px">value ${fmt(p.v, s.units)}</div>`;
           return;
         }
 
         const rows: [string, number | null | undefined][] = [
-          ["max", point.hi],
-          ["q95", point.p95],
-          ["mean", point.v],
-          ["q05", point.p05],
-          ["min", point.lo],
+          ["max", p.hi],
+          ["q95", p.p95],
+          ["mean", p.v],
+          ["q05", p.p05],
+          ["min", p.lo],
         ];
         html += '<table style="margin-left:14px;border-spacing:0">';
         rows.forEach(([name, value]) => {
-          const emphasis =
+          const style =
             name === "mean" ? `color:${text};font-weight:500` : `color:${muted}`;
           html +=
-            `<tr><td style="padding-right:10px;${emphasis}">${name}</td>` +
-            `<td style="${emphasis}">${fmt(value, s.units)}</td></tr>`;
+            `<tr><td style="padding-right:10px;${style}">${name}</td>` +
+            `<td style="${style}">${fmt(value, s.units)}</td></tr>`;
         });
         html += "</table>";
-        if (point.n != null) {
+        if (p.n != null) {
           html +=
             `<div style="margin-left:14px;color:${muted};font-size:11px">` +
-            `from ${point.n.toLocaleString()} readings</div>`;
+            `from ${p.n.toLocaleString()} readings</div>`;
         }
       });
       return html;
     }
 
+    const dayLabel = (value: number) =>
+      new Date(value).toISOString().slice(0, 10);
+
     chart.setOption(
       {
         backgroundColor: "transparent",
         animation: false,
+        progressive: 4000,
+        progressiveThreshold: 3000,
+        // Explicitly off: ECharts otherwise renders small unlabelled brush
+        // icons in the corner, which nobody finds.
+        toolbox: { show: false },
         grid: {
           left: 64,
           right: usesRight ? 64 : 24,
           top: compact ? 24 : 34,
-          bottom: compact ? 28 : 62,
+          bottom: compact ? 30 : 86,
         },
         legend: {
           data: series.map((s) => s.mnemonic),
@@ -277,16 +309,55 @@ export function TelemetryChart({
         },
         tooltip: {
           trigger: "axis",
-          axisPointer: { type: "cross" },
+          axisPointer: { type: "none" },
+          triggerOn: "mousemove",
+          transitionDuration: 0,
+          hideDelay: 40,
+          confine: true,
           backgroundColor: panel,
           borderColor: border,
+          borderWidth: 1,
           textStyle: { color: text, fontSize: 12 },
           formatter: tooltipFormatter,
         },
         xAxis: {
           type: "time",
           axisLine: { lineStyle: { color: grid } },
-          axisLabel: { color: muted, show: !compact },
+          axisTick: { lineStyle: { color: grid } },
+          // Year boundaries are drawn larger and brighter than months so the
+          // eye can find them without reading every tick.
+          splitLine: {
+            show: !compact,
+            lineStyle: { color: grid, opacity: 0.55, type: "dashed" },
+          },
+          axisLabel: {
+            show: !compact,
+            color: muted,
+            hideOverlap: true,
+            formatter: {
+              year: "{yearStyle|{yyyy}}",
+              month: "{monthStyle|{MMM}}",
+              day: "{dayStyle|{d}}",
+              hour: "{dayStyle|{HH}:{mm}}",
+              minute: "{dayStyle|{HH}:{mm}}",
+              second: "{dayStyle|{HH}:{mm}:{ss}}",
+            },
+            rich: {
+              yearStyle: {
+                color: text,
+                fontSize: 14,
+                fontWeight: "bold",
+                padding: [3, 7, 3, 7],
+                borderRadius: 4,
+                backgroundColor: panel2,
+                borderWidth: 1,
+                borderColor: border,
+              },
+              monthStyle: { color: muted, fontSize: 11 },
+              dayStyle: { color: muted, fontSize: 11 },
+            },
+          },
+          axisPointer: { show: false },
         },
         yAxis: [
           {
@@ -311,31 +382,87 @@ export function TelemetryChart({
             axisLabel: { color: muted },
           },
         ],
+        // filterMode "filter" drops out-of-range points rather than drawing all
+        // of them every frame - the main zoom performance win. The slider is
+        // styled heavily because at defaults it is almost invisible.
         dataZoom: compact
-          ? [{ type: "inside", filterMode: "none" }]
+          ? [{ type: "inside", filterMode: "filter", moveOnMouseMove: false }]
           : [
-              { type: "inside", filterMode: "none" },
-              { type: "slider", height: 22, bottom: 12 },
+              {
+                type: "inside",
+                filterMode: "filter",
+                // Drag belongs to region selection; wheel zooms, slider pans.
+                moveOnMouseMove: false,
+                zoomOnMouseWheel: true,
+              },
+              {
+                type: "slider",
+                filterMode: "filter",
+                height: 38,
+                bottom: 14,
+                borderColor: border,
+                backgroundColor: panel2,
+                fillerColor: accent + "26",
+                dataBackground: {
+                  lineStyle: { color: muted, opacity: 0.6, width: 1 },
+                  areaStyle: { color: muted, opacity: 0.18 },
+                },
+                selectedDataBackground: {
+                  lineStyle: { color: accent, opacity: 0.9, width: 1 },
+                  areaStyle: { color: accent, opacity: 0.28 },
+                },
+                handleStyle: {
+                  color: accent,
+                  borderColor: accent,
+                  shadowBlur: 0,
+                },
+                handleSize: "130%",
+                moveHandleSize: 6,
+                moveHandleStyle: { color: accent, opacity: 0.65 },
+                emphasis: {
+                  handleStyle: { color: accent, borderColor: accent },
+                  moveHandleStyle: { color: accent, opacity: 1 },
+                },
+                textStyle: { color: muted, fontSize: 11 },
+                labelFormatter: dayLabel,
+                brushSelect: false,
+              },
             ],
         brush: {
-          toolbox: ["lineX", "clear"],
           xAxisIndex: 0,
+          toolbox: [],
           throttleType: "debounce",
-          throttleDelay: 300,
+          throttleDelay: 200,
+          brushStyle: {
+            borderWidth: 1,
+            borderColor: accent,
+            color: accent + "2e",
+          },
         },
         series: dataSeries,
       },
-      { replaceMerge: ["series", "yAxis"] }
+      { replaceMerge: ["series", "yAxis", "dataZoom"] }
     );
 
-    const handler = (params: any) => {
+    const brushHandler = (params: any) => {
       const area = params?.areas?.[0];
       if (!area || !onBrush) return;
       const [a, b] = area.coordRange ?? [];
       if (a != null && b != null) onBrush(new Date(a), new Date(b));
     };
     chart.off("brushEnd");
-    chart.on("brushEnd", handler);
+    chart.on("brushEnd", brushHandler);
+
+    const zoomHandler = () => {
+      if (!onZoomChange) return;
+      const opt = chart.getOption() as any;
+      const dz = opt?.dataZoom?.[0];
+      if (!dz) return;
+      const full = (dz.start ?? 0) <= 0.5 && (dz.end ?? 100) >= 99.5;
+      onZoomChange(!full);
+    };
+    chart.off("datazoom");
+    chart.on("datazoom", zoomHandler);
   }, [
     series,
     labels,
@@ -344,12 +471,40 @@ export function TelemetryChart({
     axisFor,
     theme,
     onBrush,
+    onZoomChange,
     lookup,
     bucketSeconds,
     isAggregate,
     colorOffset,
     compact,
   ]);
+
+  // Region selection is always available: for time series the only useful
+  // brush is a horizontal time range, so there is no mode to switch into.
+  // Band series are silent, so hit-testing stays cheap.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    chart.dispatchAction({
+      type: "takeGlobalCursor",
+      key: "brush",
+      brushOption: { brushType: "lineX", brushMode: "single" },
+    });
+  }, [series, theme]);
+
+  // Clearing from outside (the Clear button) wipes the drawn region.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || clearToken === 0) return;
+    chart.dispatchAction({ type: "brush", areas: [] });
+  }, [clearToken]);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || resetZoomToken === 0) return;
+    chart.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+    onZoomChange?.(false);
+  }, [resetZoomToken, onZoomChange]);
 
   const bandText =
     bandMode === "none"
@@ -362,7 +517,10 @@ export function TelemetryChart({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-      <div ref={ref} style={{ flex: 1, minHeight: 0 }} />
+      <div
+        ref={ref}
+        style={{ flex: 1, minHeight: 0, cursor: "crosshair" }}
+      />
       {showCaption && (
         <div className="caption">
           {showLine && (

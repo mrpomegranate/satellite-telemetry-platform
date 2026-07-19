@@ -9,6 +9,7 @@
   --text: #e8e6dc;
   --muted: #9c9a92;
   --accent: #c96442;
+  --accent-soft: rgba(201, 100, 66, 0.16);
   --grid: #2e2e28;
   color-scheme: dark;
 }
@@ -21,6 +22,7 @@
   --text: #3d3d3a;
   --muted: #73726c;
   --accent: #c96442;
+  --accent-soft: rgba(201, 100, 66, 0.12);
   --grid: #e5e3d8;
   color-scheme: light;
 }
@@ -34,7 +36,6 @@ body {
   background: var(--bg);
   color: var(--text);
   font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif;
-  transition: background 0.15s ease, color 0.15s ease;
 }
 
 button,
@@ -50,20 +51,21 @@ input {
 
 button {
   cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   border-color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 button.active {
   border-color: var(--accent);
   color: var(--accent);
-}
-
-button:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* layout ------------------------------------------------------------------ */
@@ -86,31 +88,100 @@ button:disabled {
   overflow: hidden;
 }
 
-.toolbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
-}
-
 .chart-wrap {
   flex: 1;
   min-height: 0;
   padding: 10px 14px;
 }
 
+.spacer {
+  flex: 1;
+}
+
+/* toolbars ---------------------------------------------------------------- */
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.toolbar-primary {
+  background: var(--panel);
+}
+
+.toolbar-options {
+  gap: 18px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.toolbar-selection {
+  background: var(--accent-soft);
+  border-bottom-color: var(--accent);
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* labelled control groups make options findable without hovering icons */
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.control-label {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+}
+
+.btn-primary {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 500;
+  padding: 6px 14px;
+}
+
+.btn-primary.on {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.icon-btn {
+  padding: 5px 9px;
+  line-height: 1;
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
 /* sidebar ----------------------------------------------------------------- */
 
 .muted {
   color: var(--muted);
-}
-
-.section-label {
-  color: var(--muted);
-  font-size: 12px;
-  margin: 14px 0 4px;
 }
 
 .tree-item {
@@ -128,29 +199,32 @@ button:disabled {
   color: var(--accent);
 }
 
-/* controls ---------------------------------------------------------------- */
+/* chips ------------------------------------------------------------------- */
 
 .chip {
   display: inline-flex;
-  gap: 6px;
+  gap: 4px;
   align-items: center;
-  background: var(--panel);
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 2px 6px 2px 10px;
+  padding: 2px 6px 2px 11px;
   font-size: 12px;
 }
 
-.chip button {
+.chip-btn {
   border: none;
   background: none;
   padding: 0 4px;
   color: var(--muted);
+  font-size: 12px;
 }
 
-.chip button:hover {
+.chip-btn:hover {
   color: var(--accent);
 }
+
+/* segmented controls ------------------------------------------------------ */
 
 .seg {
   display: inline-flex;
@@ -162,7 +236,7 @@ button:disabled {
 .seg button {
   border: none;
   border-radius: 0;
-  padding: 4px 9px;
+  padding: 4px 11px;
   font-size: 12px;
   background: var(--panel);
 }
@@ -171,9 +245,14 @@ button:disabled {
   border-left: 1px solid var(--border);
 }
 
-.seg button.active {
+.seg button:hover:not(.active) {
   background: var(--panel-2);
+}
+
+.seg button.active {
+  background: var(--accent-soft);
   color: var(--accent);
+  font-weight: 500;
 }
 
 /* chart caption ----------------------------------------------------------- */
@@ -240,4 +319,36 @@ button:disabled {
 .pane-chart {
   flex: 1;
   min-height: 0;
+}
+
+/* empty state ------------------------------------------------------------- */
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 6px;
+  text-align: center;
+}
+
+.empty-title {
+  font-weight: 500;
+}
+
+/* zoom hint --------------------------------------------------------------- */
+
+.caption .zoom-hint {
+  margin-left: auto;
+  color: var(--accent);
+  opacity: 0.85;
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
 }
