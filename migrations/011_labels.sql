@@ -7,6 +7,10 @@
 --   anomaly     - an unexplained deviation needing investigation
 CREATE SCHEMA IF NOT EXISTS labels;
 
+-- GiST needs btree_gist to combine a uuid column with a range column in one
+-- index. Ships with Postgres as a standard extension.
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 DO $$ BEGIN
     CREATE TYPE labels.label_class AS ENUM ('anomaly', 'off_nominal');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;

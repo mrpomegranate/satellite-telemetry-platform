@@ -33,7 +33,12 @@ class Channel(BaseModel):
 
 
 class Point(BaseModel):
-    """One rendered point. Envelope fields are null for the raw tier."""
+    """One rendered point.
+
+    For aggregate tiers this summarises a whole bucket: v is the mean, lo/hi
+    the extremes, p05/p95 the 5th and 95th percentiles, and n how many raw
+    readings were aggregated. All are null for the raw tier except v.
+    """
 
     t: dt.datetime
     v: float | None = None
@@ -41,6 +46,7 @@ class Point(BaseModel):
     hi: float | None = None
     p05: float | None = None
     p95: float | None = None
+    n: int | None = None
 
 
 class Series(BaseModel):

@@ -1,4 +1,4 @@
-// Thin typed client. Vite proxies /api -> http://localhost:8000
+// Thin typed client. Vite proxies /api -> http://127.0.0.1:8000
 
 export interface Satellite {
   id: string;
@@ -24,6 +24,11 @@ export interface Channel {
   units?: string | null;
 }
 
+/**
+ * One rendered point. For aggregate tiers this summarises a whole bucket:
+ * v is the mean, lo/hi the extremes, p05/p95 the percentiles, and n how many
+ * raw readings were aggregated. Only v is set on the raw tier.
+ */
 export interface Point {
   t: string;
   v: number | null;
@@ -31,6 +36,7 @@ export interface Point {
   hi: number | null;
   p05: number | null;
   p95: number | null;
+  n: number | null;
 }
 
 export interface Series {
@@ -49,9 +55,26 @@ export interface TimeseriesResponse {
   series: Series[];
 }
 
+export interface GroupMember {
+  channel_id: string;
+  mnemonic: string;
+  units?: string | null;
+  display_order: number;
+  axis: number;
+}
+
+export interface Group {
+  id: string;
+  satellite_id: string;
+  name: string;
+  description?: string | null;
+  members: GroupMember[];
+}
+
 export interface Label {
   id: string;
   group_id: string;
+  channel_id?: string | null;
   start: string;
   end: string;
   label_class: string;
@@ -60,6 +83,7 @@ export interface Label {
   color?: string | null;
   review_status: string;
   note?: string | null;
+  created_at: string;
 }
 
 export interface TaxonomyItem {
@@ -67,6 +91,7 @@ export interface TaxonomyItem {
   label_class: string;
   code: string;
   name: string;
+  description?: string | null;
   color?: string | null;
 }
 
@@ -113,6 +138,16 @@ export const api = {
     if (tier) qs.set("tier", tier);
     return get<TimeseriesResponse>(`/timeseries?${qs}`);
   },
+
+  groups: (satelliteId?: string) =>
+    get<Group[]>(`/groups${satelliteId ? `?satellite_id=${satelliteId}` : ""}`),
+
+  createGroup: (payload: {
+    satellite_id: string;
+    name: string;
+    description?: string;
+    channel_ids: string[];
+  }) => post<Group>("/groups", payload),
 
   taxonomy: () => get<TaxonomyItem[]>("/labels/taxonomy"),
 

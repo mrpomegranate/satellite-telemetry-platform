@@ -1,1 +1,5 @@
 .venv
+uv.lock
+__pycache__/
+.env
+web/node_modules/

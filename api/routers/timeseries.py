@@ -13,13 +13,16 @@ from ..tiers import pick_tier
 
 router = APIRouter(prefix="/timeseries", tags=["timeseries"])
 
+# n = how many raw readings the source aggregated into this bucket. Surfacing it
+# lets the UI explain itself: "mean of 21,600 samples" rather than a bare dot.
 STATS_SQL = """
 SELECT ss.bucket AS t,
-       ss.value_mean AS v,
-       ss.value_min  AS lo,
-       ss.value_max  AS hi,
-       ss.value_q05  AS p05,
-       ss.value_q95  AS p95
+       ss.value_mean  AS v,
+       ss.value_min   AS lo,
+       ss.value_max   AS hi,
+       ss.value_q05   AS p05,
+       ss.value_q95   AS p95,
+       ss.value_count AS n
 FROM telemetry.sample_stats ss
 WHERE ss.channel_id = %s
   AND ss.bucket_seconds = %s
@@ -30,7 +33,8 @@ ORDER BY ss.bucket
 RAW_SQL = """
 SELECT s.ts AS t, s.value AS v,
        NULL::double precision AS lo, NULL::double precision AS hi,
-       NULL::double precision AS p05, NULL::double precision AS p95
+       NULL::double precision AS p05, NULL::double precision AS p95,
+       NULL::bigint AS n
 FROM telemetry.sample s
 WHERE s.channel_id = %s
   AND s.ts >= %s AND s.ts < %s
