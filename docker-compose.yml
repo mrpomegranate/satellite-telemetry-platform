@@ -1,0 +1,35 @@
+# The database itself lives in the telemetry-db repo. This compose file runs
+# the platform services against it, joining that repo's network.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://telemetry:telemetry@telemetry-db:5432/esa}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      MAX_POINTS: ${MAX_POINTS:-2000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    volumes:
+      - ./api:/app/api:ro
+    networks:
+      - telemetry
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    entrypoint: ["python", "-m", "api.migrate"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://telemetry:telemetry@telemetry-db:5432/esa}
+    volumes:
+      - ./migrations:/app/migrations:ro
+    networks:
+      - telemetry
+    profiles: ["tools"]
+
+networks:
+  telemetry:
+    external: true
+    name: ${TELEMETRY_NETWORK:-satellite-telemetry-db_default}
