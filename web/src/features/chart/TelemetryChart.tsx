@@ -43,9 +43,16 @@ type Prepared = {
   until: string;
 };
 
+export interface PendingInterval {
+  id: string;
+  start: string;
+  end: string;
+}
+
 export function TelemetryChart({
   series,
   labels,
+  intervals = [],
   theme,
   bandMode = "quantile",
   showLine = true,
@@ -57,9 +64,12 @@ export function TelemetryChart({
   resetZoomToken = 0,
   onBrush,
   onZoomChange,
+  onResetView,
 }: {
   series: Series[];
   labels: Label[];
+  /** Unsaved selections awaiting a label. */
+  intervals?: PendingInterval[];
   theme: Theme;
   bandMode?: BandMode;
   showLine?: boolean;
@@ -73,6 +83,8 @@ export function TelemetryChart({
   resetZoomToken?: number;
   onBrush?: (start: Date, end: Date) => void;
   onZoomChange?: (zoomed: boolean) => void;
+  /** Double-click on the plot: back to the full time range. */
+  onResetView?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -110,7 +122,12 @@ export function TelemetryChart({
     chartRef.current = chart;
     const resize = () => chart.resize();
     window.addEventListener("resize", resize);
+    // Window resize is not enough: the container also shrinks when panels
+    // below it grow, and ECharts keeps its old canvas size until told.
+    const observer = new ResizeObserver(resize);
+    observer.observe(ref.current);
     return () => {
+      observer.disconnect();
       window.removeEventListener("resize", resize);
       chart.dispose();
       chartRef.current = null;
@@ -201,18 +218,34 @@ export function TelemetryChart({
         animation: false,
         z: 3,
         markArea:
-          index === 0 && labels.length
+          index === 0 && (labels.length || intervals.length)
             ? {
                 silent: true,
-                itemStyle: { opacity: 0.18 },
-                data: labels.map((l) => [
-                  {
-                    xAxis: l.start,
-                    itemStyle: { color: l.color ?? "#993C1D" },
-                    name: l.taxonomy_name ?? l.label_class,
-                  },
-                  { xAxis: l.end },
-                ]),
+                data: [
+                  // saved labels: solid tint in the taxonomy colour
+                  ...labels.map((l) => [
+                    {
+                      xAxis: l.start,
+                      itemStyle: { color: l.color ?? "#993C1D", opacity: 0.18 },
+                      name: l.taxonomy_name ?? l.label_class,
+                    },
+                    { xAxis: l.end },
+                  ]),
+                  // pending selections: dashed accent outline, clearly unsaved
+                  ...intervals.map((iv) => [
+                    {
+                      xAxis: iv.start,
+                      itemStyle: {
+                        color: accent,
+                        opacity: 0.1,
+                        borderColor: accent,
+                        borderWidth: 1,
+                        borderType: "dashed",
+                      },
+                    },
+                    { xAxis: iv.end },
+                  ]),
+                ],
               }
             : undefined,
       });
@@ -441,7 +474,9 @@ export function TelemetryChart({
         },
         series: dataSeries,
       },
-      { replaceMerge: ["series", "yAxis", "dataZoom"] }
+      // dataZoom is deliberately NOT in replaceMerge: replacing it resets the
+      // zoom window to full extent on every re-render.
+      { replaceMerge: ["series", "yAxis"] }
     );
 
     const brushHandler = (params: any) => {
@@ -463,15 +498,21 @@ export function TelemetryChart({
     };
     chart.off("datazoom");
     chart.on("datazoom", zoomHandler);
+
+    const zr = chart.getZr();
+    zr.off("dblclick");
+    if (onResetView) zr.on("dblclick", () => onResetView());
   }, [
     series,
     labels,
+    intervals,
     bandMode,
     showLine,
     axisFor,
     theme,
     onBrush,
     onZoomChange,
+    onResetView,
     lookup,
     bucketSeconds,
     isAggregate,

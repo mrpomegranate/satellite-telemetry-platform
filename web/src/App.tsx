@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Splitter } from "./components/Splitter";
 import { CatalogTree } from "./features/catalog/CatalogTree";
 import { ChannelFinder } from "./features/catalog/ChannelFinder";
 import { ChartPanes, type ChartLayout } from "./features/chart/ChartPanes";
-import { type BandMode } from "./features/chart/TelemetryChart";
-import { LabelPanel } from "./features/labeling/LabelPanel";
+import { type BandMode, type PendingInterval } from "./features/chart/TelemetryChart";
+import { IntervalPanel } from "./features/intervals/IntervalPanel";
 import { useTheme } from "./theme";
 import { api, type Channel, type Label, type Series } from "./api/client";
 
+let intervalSeq = 0;
+
 export default function App() {
   const [theme, toggleTheme] = useTheme();
-  const [subsystemId, setSubsystemId] = useState<string | undefined>();
+  const [subsystemIds, setSubsystemIds] = useState<string[]>([]);
   const [selected, setSelected] = useState<Channel[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
-  const [groupId, setGroupId] = useState<string | null>(null);
+  const [groupId] = useState<string | null>(null);
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
-  const [selection, setSelection] = useState<{ start: Date; end: Date } | null>(null);
+  // Full extent of the data, kept so the view can always be restored.
+  const [fullRange, setFullRange] = useState<{ start: string; end: string } | null>(null);
+  const [intervals, setIntervals] = useState<PendingInterval[]>([]);
   const [clearToken, setClearToken] = useState(0);
   const [tier, setTier] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -24,17 +29,56 @@ export default function App() {
   const [layout, setLayout] = useState<ChartLayout>("overlay");
   const [axisFor, setAxisFor] = useState<Record<string, 0 | 1>>({});
   const [zoomed, setZoomed] = useState(false);
+  const [emptyChannels, setEmptyChannels] = useState<string[]>([]);
+  // Pane sizes are user-adjustable; clamped so neither pane can vanish.
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [panelHeight, setPanelHeight] = useState(230);
   const [resetZoomToken, setResetZoomToken] = useState(0);
 
+  // Frame the view from the union of every selected channel's extent. Asking
+  // only the first one breaks as soon as it is a catalog row with no samples
+  // (the demo seed, or a channel whose tier has not been ingested).
   useEffect(() => {
     if (!selected.length) {
       setSeries([]);
       setRange(null);
+      setFullRange(null);
+      setEmptyChannels([]);
       return;
     }
-    api.extent(selected[0].id).then((e) => {
-      if (e.first && e.last) setRange({ start: e.first, end: e.last });
+    let cancelled = false;
+    Promise.all(
+      selected.map((c) =>
+        api
+          .extent(c.id)
+          .then((e) => ({ channel: c, extent: e }))
+          .catch(() => ({ channel: c, extent: null }))
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      const withData = results.filter((r) => r.extent?.first && r.extent?.last);
+      setEmptyChannels(
+        results.filter((r) => !r.extent?.first).map((r) => r.channel.mnemonic)
+      );
+      if (!withData.length) {
+        setSeries([]);
+        setRange(null);
+        setFullRange(null);
+        return;
+      }
+      const start = withData
+        .map((r) => r.extent!.first as string)
+        .sort()[0];
+      const end = withData
+        .map((r) => r.extent!.last as string)
+        .sort()
+        .slice(-1)[0];
+      setRange({ start, end });
+      setFullRange({ start, end });
     });
+    return () => {
+      cancelled = true;
+    };
   }, [selected]);
 
   useEffect(() => {
@@ -57,6 +101,57 @@ export default function App() {
 
   useEffect(reloadLabels, [reloadLabels]);
 
+  // Memoised: an inline arrow here changes identity every render, which
+  // re-runs the chart's setOption effect and used to reset the zoom window.
+  const handleBrush = useCallback((start: Date, end: Date) => {
+    setIntervals((prev) => [
+      ...prev,
+      {
+        id: `iv-${++intervalSeq}`,
+        start: start.toISOString(),
+        end: end.toISOString(),
+      },
+    ]);
+    setClearToken((t) => t + 1); // wipe the drawn box; the panel owns it now
+  }, []);
+
+  const handleZoomChange = useCallback((value: boolean) => setZoomed(value), []);
+
+  const resetView = useCallback(() => {
+    if (fullRange) setRange(fullRange);
+    setResetZoomToken((t) => t + 1);
+  }, [fullRange]);
+
+  const updateInterval = useCallback(
+    (id: string, patch: Partial<PendingInterval>) =>
+      setIntervals((prev) =>
+        prev.map((iv) => (iv.id === id ? { ...iv, ...patch } : iv))
+      ),
+    []
+  );
+
+  const removeInterval = useCallback(
+    (id: string) => setIntervals((prev) => prev.filter((iv) => iv.id !== id)),
+    []
+  );
+
+  const clearIntervals = useCallback(() => setIntervals([]), []);
+
+  const zoomToInterval = useCallback((iv: PendingInterval) => {
+    setRange({ start: iv.start, end: iv.end });
+  }, []);
+
+  const setManyChannels = useCallback((channels: Channel[], on: boolean) => {
+    setSelected((prev) => {
+      if (on) {
+        const have = new Set(prev.map((c) => c.id));
+        return [...prev, ...channels.filter((c) => !have.has(c.id))];
+      }
+      const drop = new Set(channels.map((c) => c.id));
+      return prev.filter((c) => !drop.has(c.id));
+    });
+  }, []);
+
   function toggleChannel(c: Channel) {
     setSelected((prev) =>
       prev.some((x) => x.id === c.id)
@@ -69,29 +164,51 @@ export default function App() {
     setAxisFor((prev) => ({ ...prev, [channelId]: prev[channelId] === 1 ? 0 : 1 }));
   }
 
-  function clearSelection() {
-    setSelection(null);
-    setClearToken((t) => t + 1);
-  }
+  const resizeSidebar = useCallback(
+    (delta: number) =>
+      setSidebarWidth((w) => Math.min(560, Math.max(190, w + delta))),
+    []
+  );
+
+  const resizePanel = useCallback(
+    (delta: number) =>
+      setPanelHeight((h) =>
+        Math.min(window.innerHeight - 320, Math.max(72, h - delta))
+      ),
+    []
+  );
 
   const hasData = series.length > 0;
+  const validIntervals = useMemo(
+    () => intervals.filter((iv) => new Date(iv.end) > new Date(iv.start)),
+    [intervals]
+  );
 
   return (
-    <div className="layout">
+    <div
+      className="layout"
+      style={{ gridTemplateColumns: `${sidebarWidth}px 4px 1fr` }}
+    >
       <aside className="sidebar">
         <CatalogTree
-          selectedId={subsystemId}
-          onSelectSubsystem={(sub) => setSubsystemId(sub.id)}
+          selectedIds={subsystemIds}
+          onSelectSubsystems={(ids) => setSubsystemIds(ids)}
         />
         <ChannelFinder
-          subsystemId={subsystemId}
+          subsystemIds={subsystemIds}
           selected={selected}
           onToggle={toggleChannel}
+          onSetMany={setManyChannels}
         />
       </aside>
 
+      <Splitter
+        orientation="vertical"
+        onResize={resizeSidebar}
+        onDoubleClick={() => setSidebarWidth(280)}
+      />
+
       <main className="main">
-        {/* Row 1: what is plotted, and the primary action */}
         <div className="toolbar toolbar-primary">
           <div className="chips">
             {selected.length === 0 ? (
@@ -125,23 +242,29 @@ export default function App() {
 
           {loading && <span className="muted">loading\u2026</span>}
 
-          {zoomed && (
-            <button
-              onClick={() => setResetZoomToken((t) => t + 1)}
-              title="Show the full time range again"
+          {emptyChannels.length > 0 && (
+            <span
+              className="badge badge-warn"
+              title={`No telemetry ingested for: ${emptyChannels.join(", ")}`}
             >
-              Reset zoom
-            </button>
+              {emptyChannels.length} channel
+              {emptyChannels.length === 1 ? "" : "s"} with no data
+            </span>
           )}
 
-          {hasData && !selection && (
+          {hasData && (
             <span className="hint">
-              Drag across the chart to select a time window
+              Drag to add an interval &middot; double-click to reset view
             </span>
+          )}
+
+          {(zoomed || (fullRange && range && range.start !== fullRange.start)) && (
+            <button onClick={resetView} title="Back to the full time range">
+              Reset view
+            </button>
           )}
         </div>
 
-        {/* Row 2: display options, grouped and labelled */}
         <div className="toolbar toolbar-options">
           <div className="control-group">
             <span className="control-label">Layout</span>
@@ -220,33 +343,11 @@ export default function App() {
           </button>
         </div>
 
-        {/* Row 3: selection and labeling, only when relevant */}
-        {selection && (
-          <div className="toolbar toolbar-selection">
-            <>
-                <span className="badge badge-accent">
-                  {selection.start.toISOString().slice(0, 16).replace("T", " ")}
-                  {"  \u2192  "}
-                  {selection.end.toISOString().slice(0, 16).replace("T", " ")}
-                </span>
-                <LabelPanel
-                  selection={selection}
-                  groupId={groupId}
-                  onSaved={() => {
-                    clearSelection();
-                    reloadLabels();
-                  }}
-                />
-              <span className="spacer" />
-              <button onClick={clearSelection}>Clear</button>
-            </>
-          </div>
-        )}
-
         <div className="chart-wrap">
           <ChartPanes
             series={series}
             labels={labels}
+            intervals={validIntervals}
             theme={theme}
             layout={layout}
             bandMode={bandMode}
@@ -254,10 +355,26 @@ export default function App() {
             axisFor={axisFor}
             clearToken={clearToken}
             resetZoomToken={resetZoomToken}
-            onZoomChange={setZoomed}
-            onBrush={(start, end) => setSelection({ start, end })}
+            onZoomChange={handleZoomChange}
+            onResetView={resetView}
+            onBrush={handleBrush}
           />
         </div>
+
+        <Splitter
+          orientation="horizontal"
+          onResize={resizePanel}
+          onDoubleClick={() => setPanelHeight(230)}
+        />
+
+        <IntervalPanel
+          height={panelHeight}
+          intervals={intervals}
+          onChange={updateInterval}
+          onRemove={removeInterval}
+          onClearAll={clearIntervals}
+          onZoomTo={zoomToInterval}
+        />
       </main>
     </div>
   );

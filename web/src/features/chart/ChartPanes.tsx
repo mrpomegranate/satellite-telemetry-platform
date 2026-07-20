@@ -1,4 +1,8 @@
-import { TelemetryChart, type BandMode } from "./TelemetryChart";
+import {
+  TelemetryChart,
+  type BandMode,
+  type PendingInterval,
+} from "./TelemetryChart";
 import type { Label, Series } from "../../api/client";
 import type { Theme } from "../../theme";
 
@@ -16,6 +20,7 @@ export type ChartLayout = "overlay" | "stacked";
 export function ChartPanes({
   series,
   labels,
+  intervals = [],
   theme,
   layout,
   bandMode,
@@ -25,9 +30,11 @@ export function ChartPanes({
   resetZoomToken = 0,
   onBrush,
   onZoomChange,
+  onResetView,
 }: {
   series: Series[];
   labels: Label[];
+  intervals?: PendingInterval[];
   theme: Theme;
   layout: ChartLayout;
   bandMode: BandMode;
@@ -37,6 +44,7 @@ export function ChartPanes({
   resetZoomToken?: number;
   onBrush?: (start: Date, end: Date) => void;
   onZoomChange?: (zoomed: boolean) => void;
+  onResetView?: () => void;
 }) {
   if (!series.length) {
     return (
@@ -54,6 +62,7 @@ export function ChartPanes({
       <TelemetryChart
         series={series}
         labels={labels}
+        intervals={intervals}
         theme={theme}
         bandMode={bandMode}
         showLine={showLine}
@@ -62,6 +71,7 @@ export function ChartPanes({
         resetZoomToken={resetZoomToken}
         onBrush={onBrush}
         onZoomChange={onZoomChange}
+        onResetView={onResetView}
       />
     );
   }
@@ -78,6 +88,7 @@ export function ChartPanes({
             <TelemetryChart
               series={[s]}
               labels={labels}
+              intervals={intervals}
               theme={theme}
               bandMode={bandMode}
               showLine={showLine}
@@ -86,6 +97,7 @@ export function ChartPanes({
               showCaption={false}
               clearToken={clearToken}
               onBrush={onBrush}
+              onResetView={onResetView}
             />
           </div>
         </div>
