@@ -89,35 +89,98 @@ class Group(BaseModel):
 
 
 class LabelCreate(BaseModel):
+    """A label drawn by a human.
+
+    Deliberately cannot express a model proposal. There is no `review_status`,
+    `tier`, `source`, or attribution field here: the server sets all of them.
+    Proposals are written by the detection run (see `create_proposals`), where
+    attribution comes from the run itself rather than from a client claim.
+    """
+
     group_id: uuid.UUID
     start: dt.datetime
     end: dt.datetime
-    label_class: str = Field(pattern="^(anomaly|off_nominal)$")
-    taxonomy_code: str | None = None
-    channel_id: uuid.UUID | None = None
+    label_class: str = Field(pattern="^(anomaly|off_nominal|nominal)$")
+    taxonomy_code: str
+    channel_ids: list[uuid.UUID] = []
+    scope: str = Field(default="channel", pattern="^(channel|group)$")
+    severity: int | None = Field(default=None, ge=1, le=5)
     note: str | None = None
-    review_status: str = "accepted"
+    missed: bool = False
+    """True when the analyst is marking something a scored model failed to
+    propose. Counts as a false negative; only meaningful inside a detection
+    run's window."""
+
+
+class LabelReview(BaseModel):
+    """An analyst's verdict on a model proposal."""
+
+    review_status: str = Field(pattern="^(accepted|rejected)$")
+    note: str | None = None
+
+
+class ProposedRegion(BaseModel):
+    """One region a detection run wants a human to look at."""
+
+    start: dt.datetime
+    end: dt.datetime
+    label_class: str = Field(pattern="^(anomaly|off_nominal|nominal)$")
+    taxonomy_code: str
+    channel_ids: list[uuid.UUID] = []
+    scope: str = Field(default="channel", pattern="^(channel|group)$")
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    severity: int | None = Field(default=None, ge=1, le=5)
+    note: str | None = None
 
 
 class Label(BaseModel):
     id: uuid.UUID
-    group_id: uuid.UUID
-    channel_id: uuid.UUID | None = None
+    group_id: uuid.UUID | None = None
+    channel_ids: list[uuid.UUID] = []
     start: dt.datetime
     end: dt.datetime
     label_class: str
+    scope: str
+    tier: str
+    source: str
     taxonomy_code: str | None = None
     taxonomy_name: str | None = None
     color: str | None = None
     review_status: str
+    severity: int | None = None
+    confidence: float | None = None
     note: str | None = None
+    # Provenance. Null for human labels; all three set for model proposals.
+    proposed_by_version: uuid.UUID | None = None
+    detection_run_id: uuid.UUID | None = None
+    ruleset_id: uuid.UUID | None = None
+    author_id: uuid.UUID | None = None
+    reviewed_by: uuid.UUID | None = None
+    reviewed_at: dt.datetime | None = None
+    promoted_by: uuid.UUID | None = None
+    promoted_at: dt.datetime | None = None
+    # Resolved from proposed_by_version so a client can group and filter by
+    # detector without holding a uuid-to-name map of its own.
+    model_name: str | None = None
+    algorithm: str | None = None
+    model_version: int | None = None
     created_at: dt.datetime
 
 
 class TaxonomyItem(BaseModel):
+    """Taxonomy no longer belongs to a class.
+
+    Migration 013 dropped `taxonomy.label_class` in favour of
+    `allowed_classes`, because the same event type can be an anomaly or an
+    expected nominal event depending on context - a commanded reset versus an
+    uncommanded one.
+    """
+
     id: uuid.UUID
-    label_class: str
     code: str
     name: str
+    allowed_classes: list[str]
+    parent_code: str | None = None
     description: str | None = None
     color: str | None = None
+    approved: bool = True

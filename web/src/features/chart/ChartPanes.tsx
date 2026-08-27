@@ -31,6 +31,7 @@ export function ChartPanes({
   onBrush,
   onZoomChange,
   onResetView,
+  onLabelClick,
 }: {
   series: Series[];
   labels: Label[];
@@ -45,6 +46,7 @@ export function ChartPanes({
   onBrush?: (start: Date, end: Date) => void;
   onZoomChange?: (zoomed: boolean) => void;
   onResetView?: () => void;
+  onLabelClick?: (label: Label) => void;
 }) {
   if (!series.length) {
     return (
@@ -72,6 +74,7 @@ export function ChartPanes({
         onBrush={onBrush}
         onZoomChange={onZoomChange}
         onResetView={onResetView}
+        onLabelClick={onLabelClick}
       />
     );
   }
@@ -98,6 +101,7 @@ export function ChartPanes({
               clearToken={clearToken}
               onBrush={onBrush}
               onResetView={onResetView}
+              onLabelClick={onLabelClick}
             />
           </div>
         </div>

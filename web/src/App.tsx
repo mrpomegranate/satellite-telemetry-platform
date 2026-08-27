@@ -4,9 +4,11 @@ import { CatalogTree } from "./features/catalog/CatalogTree";
 import { ChannelFinder } from "./features/catalog/ChannelFinder";
 import { ChartPanes, type ChartLayout } from "./features/chart/ChartPanes";
 import { type BandMode, type PendingInterval } from "./features/chart/TelemetryChart";
+import { GroupPicker } from "./features/groups/GroupPicker";
+import { FindingsPanel } from "./features/findings/FindingsPanel";
 import { IntervalPanel } from "./features/intervals/IntervalPanel";
 import { useTheme } from "./theme";
-import { api, type Channel, type Label, type Series } from "./api/client";
+import { api, type Channel, type Group, type Label, type Series } from "./api/client";
 
 let intervalSeq = 0;
 
@@ -16,7 +18,8 @@ export default function App() {
   const [selected, setSelected] = useState<Channel[]>([]);
   const [series, setSeries] = useState<Series[]>([]);
   const [labels, setLabels] = useState<Label[]>([]);
-  const [groupId] = useState<string | null>(null);
+  const [group, setGroup] = useState<Group | null>(null);
+  const groupId = group?.id ?? null;
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
   // Full extent of the data, kept so the view can always be restored.
   const [fullRange, setFullRange] = useState<{ start: string; end: string } | null>(null);
@@ -34,6 +37,9 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [panelHeight, setPanelHeight] = useState(230);
   const [resetZoomToken, setResetZoomToken] = useState(0);
+  // Tabs rather than stacking: the chart is the reason anyone is here, and two
+  // stacked panels take the height it needs.
+  const [panelTab, setPanelTab] = useState<"findings" | "intervals">("findings");
 
   // Frame the view from the union of every selected channel's extent. Asking
   // only the first one breaks as soon as it is a catalog row with no samples
@@ -141,6 +147,51 @@ export default function App() {
     setRange({ start: iv.start, end: iv.end });
   }, []);
 
+  // Zooming to a label's exact bounds is useless twice over: a six-hour region
+  // fills the screen with none of the behaviour it is supposed to contrast
+  // against, and a window that narrow makes the API reach for a finer tier
+  // that may not be ingested, so the chart comes back empty. Two weeks either
+  // side keeps the 6h tier in play and still centres the event.
+  const zoomToLabel = useCallback(
+    (label: Label) => {
+      const from = new Date(label.start).getTime();
+      const to = new Date(label.end).getTime();
+      const pad = Math.max(3 * (to - from), 14 * 24 * 3600 * 1000);
+      const lo = fullRange ? new Date(fullRange.start).getTime() : -Infinity;
+      const hi = fullRange ? new Date(fullRange.end).getTime() : Infinity;
+      setRange({
+        start: new Date(Math.max(lo, from - pad)).toISOString(),
+        end: new Date(Math.min(hi, to + pad)).toISOString(),
+      });
+    },
+    [fullRange]
+  );
+
+  // Loading a group replaces the chart contents rather than adding to them:
+  // a group is a working set, and merging it into whatever was already there
+  // would make "what am I looking at" unanswerable. Real Channel rows are
+  // fetched because group members carry no subsystem, which the finder needs.
+  const loadGroup = useCallback(async (next: Group) => {
+    setGroup(next);
+    const wanted = new Set(next.members.map((m) => m.channel_id));
+    try {
+      const all = await api.channels({ satellite_id: next.satellite_id });
+      setSelected(all.filter((c) => wanted.has(c.id)));
+    } catch {
+      setSelected([]);
+    }
+    setAxisFor(
+      Object.fromEntries(
+        next.members.map((m) => [m.channel_id, (m.axis === 1 ? 1 : 0) as 0 | 1])
+      )
+    );
+  }, []);
+
+  const clearGroup = useCallback(() => {
+    setGroup(null);
+    setLabels([]);
+  }, []);
+
   const setManyChannels = useCallback((channels: Channel[], on: boolean) => {
     setSelected((prev) => {
       if (on) {
@@ -190,6 +241,12 @@ export default function App() {
       style={{ gridTemplateColumns: `${sidebarWidth}px 4px 1fr` }}
     >
       <aside className="sidebar">
+        <GroupPicker
+          selected={selected}
+          activeGroup={group}
+          onLoad={loadGroup}
+          onClear={clearGroup}
+        />
         <CatalogTree
           selectedIds={subsystemIds}
           onSelectSubsystems={(ids) => setSubsystemIds(ids)}
@@ -358,6 +415,7 @@ export default function App() {
             onZoomChange={handleZoomChange}
             onResetView={resetView}
             onBrush={handleBrush}
+            onLabelClick={zoomToLabel}
           />
         </div>
 
@@ -367,14 +425,38 @@ export default function App() {
           onDoubleClick={() => setPanelHeight(230)}
         />
 
-        <IntervalPanel
-          height={panelHeight}
-          intervals={intervals}
-          onChange={updateInterval}
-          onRemove={removeInterval}
-          onClearAll={clearIntervals}
-          onZoomTo={zoomToInterval}
-        />
+        <div className="panel-tabs">
+          <button
+            className={panelTab === "findings" ? "active" : ""}
+            onClick={() => setPanelTab("findings")}
+          >
+            Findings{labels.length ? ` (${labels.length})` : ""}
+          </button>
+          <button
+            className={panelTab === "intervals" ? "active" : ""}
+            onClick={() => setPanelTab("intervals")}
+          >
+            Time intervals{intervals.length ? ` (${intervals.length})` : ""}
+          </button>
+        </div>
+
+        {panelTab === "findings" ? (
+          <FindingsPanel
+            height={panelHeight}
+            labels={labels}
+            onZoomTo={zoomToLabel}
+            onReviewed={reloadLabels}
+          />
+        ) : (
+          <IntervalPanel
+            height={panelHeight}
+            intervals={intervals}
+            onChange={updateInterval}
+            onRemove={removeInterval}
+            onClearAll={clearIntervals}
+            onZoomTo={zoomToInterval}
+          />
+        )}
       </main>
     </div>
   );

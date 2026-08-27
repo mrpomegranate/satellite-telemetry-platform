@@ -20,32 +20,84 @@ router = APIRouter(prefix="/registry", tags=["registry"])
 
 @router.get("/models")
 async def list_models(group_id: uuid.UUID | None = None):
+    """Models, optionally scoped to those bound to a group.
+
+    `promoted_version` is the count of currently-promoted versions (0 or 1) so
+    a picker can grey out models that have nothing runnable yet, without a
+    second round trip per row.
+    """
     if group_id:
         return await fetch_all(
             """
-            SELECT m.id, m.name, m.algorithm, b.is_default
+            SELECT m.id, m.name, m.algorithm, m.task::text, m.description,
+                   b.is_default,
+                   count(v.id) FILTER (WHERE v.status = 'promoted') AS promoted_versions,
+                   count(v.id) FILTER (WHERE v.status = 'candidate') AS candidate_versions
             FROM ml.model m
             JOIN ml.model_group_binding b ON b.model_id = m.id
+            LEFT JOIN ml.model_version v ON v.model_id = m.id
             WHERE b.group_id = %s
+            GROUP BY m.id, m.name, m.algorithm, m.task, m.description, b.is_default
             ORDER BY m.name
             """,
             (group_id,),
         )
-    return await fetch_all("SELECT id, name, algorithm FROM ml.model ORDER BY name")
+    return await fetch_all(
+        """
+        SELECT m.id, m.name, m.algorithm, m.task::text, m.description,
+               count(v.id) FILTER (WHERE v.status = 'promoted') AS promoted_versions,
+               count(v.id) FILTER (WHERE v.status = 'candidate') AS candidate_versions
+        FROM ml.model m
+        LEFT JOIN ml.model_version v ON v.model_id = m.id
+        GROUP BY m.id, m.name, m.algorithm, m.task, m.description
+        ORDER BY m.name
+        """
+    )
 
 
 @router.get("/models/{model_id}/versions")
-async def list_versions(model_id: uuid.UUID):
+async def list_versions(model_id: uuid.UUID, promoted_only: bool = False):
+    """Versions of one model, newest first.
+
+    Returns what a person needs to choose responsibly: the pinned decision
+    boundary and how it was derived, the evaluation metrics, and the training
+    scope carried by the manifest. `promoted_only` serves the detection-run
+    picker (DET-F-08); the signoff screen leaves it false so candidates show.
+
+    `channel_ids` and `time_ranges` are manifest jsonb, returned as-is. The
+    count is precomputed because a picker wants "trained on 2 channels", not
+    the array.
+    """
     return await fetch_all(
         """
-        SELECT v.id, v.version, v.status::text, v.eval_metrics,
-               v.created_at, v.promoted_at, man.content_hash
+        SELECT v.id,
+               v.version,
+               v.status::text,
+               v.eval_metrics,
+               v.threshold,
+               v.threshold_method,
+               v.artifact_uri,
+               v.pipeline_run_id,
+               v.created_at,
+               v.promoted_at,
+               v.promoted_by,
+               m.name        AS model_name,
+               m.algorithm,
+               m.task::text,
+               man.content_hash,
+               man.channel_ids,
+               man.time_ranges,
+               man.ingest_watermark,
+               man.transform_version,
+               jsonb_array_length(man.channel_ids) AS channel_count
         FROM ml.model_version v
+        JOIN ml.model m ON m.id = v.model_id
         LEFT JOIN ml.manifest man ON man.id = v.manifest_id
         WHERE v.model_id = %s
+          AND (NOT %s OR v.status = 'promoted')
         ORDER BY v.version DESC
         """,
-        (model_id,),
+        (model_id, promoted_only),
     )
 
 

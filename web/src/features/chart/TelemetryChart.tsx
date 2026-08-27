@@ -15,6 +15,9 @@ const PALETTE = [
   "#B45309",
 ];
 
+/** Series name for the clickable flag markers; used to route click events. */
+const FLAG_SERIES = "__flags__";
+
 function cssVar(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement)
     .getPropertyValue(name)
@@ -65,6 +68,7 @@ export function TelemetryChart({
   onBrush,
   onZoomChange,
   onResetView,
+  onLabelClick,
 }: {
   series: Series[];
   labels: Label[];
@@ -85,6 +89,8 @@ export function TelemetryChart({
   onZoomChange?: (zoomed: boolean) => void;
   /** Double-click on the plot: back to the full time range. */
   onResetView?: () => void;
+  /** Clicking a flagged region zooms the view to it. */
+  onLabelClick?: (label: Label) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<echarts.ECharts | null>(null);
@@ -217,16 +223,48 @@ export function TelemetryChart({
         connectNulls: false,
         animation: false,
         z: 3,
+        // Dashed boundary lines, not just a tint. A 6-hour region on a
+        // four-year axis is a sliver: the shading blends into the envelope and
+        // vanishes. A vertical rule stays visible at any zoom, which is the
+        // whole point of flagging it.
+        markLine:
+          index === 0 && labels.length
+            ? {
+                silent: true,
+                symbol: "none",
+                label: { show: false },
+                animation: false,
+                data: labels.flatMap((l) => {
+                  const stroke = {
+                    color: l.color ?? "#993C1D",
+                    width: 1.5,
+                    opacity: 0.95,
+                    // a proposal is provisional until someone rules on it, so
+                    // it reads as dashed; a decided label is solid
+                    type: (l.review_status === "proposed"
+                      ? "dashed"
+                      : "solid") as "dashed" | "solid",
+                  };
+                  return [
+                    { xAxis: l.start, lineStyle: stroke },
+                    { xAxis: l.end, lineStyle: stroke },
+                  ];
+                }),
+              }
+            : undefined,
         markArea:
           index === 0 && (labels.length || intervals.length)
             ? {
                 silent: true,
+                // names collide into unreadable overlap once regions cluster;
+                // the tooltip and the panel carry the name instead
+                label: { show: false },
                 data: [
                   // saved labels: solid tint in the taxonomy colour
                   ...labels.map((l) => [
                     {
                       xAxis: l.start,
-                      itemStyle: { color: l.color ?? "#993C1D", opacity: 0.18 },
+                      itemStyle: { color: l.color ?? "#993C1D", opacity: 0.3 },
                       name: l.taxonomy_name ?? l.label_class,
                     },
                     { xAxis: l.end },
@@ -250,6 +288,56 @@ export function TelemetryChart({
             : undefined,
       });
     });
+
+    // One clickable marker per flagged region. A dashed rule cannot be
+    // hovered or clicked with any confidence; a symbol has a real hit area,
+    // native hover emphasis and a pointer cursor, so it advertises that it
+    // does something.
+    if (series.length && labels.length) {
+      dataSeries.push({
+        name: FLAG_SERIES,
+        type: "scatter",
+        yAxisIndex: 2,
+        symbol: "triangle",
+        symbolRotate: 180,
+        symbolSize: 11,
+        cursor: "pointer",
+        animation: false,
+        z: 10,
+        data: labels.map((l) => ({
+          value: [
+            // midpoint: a six-hour region is far narrower than the marker, so
+            // anchoring to the start would sit the symbol off-centre
+            new Date(
+              (new Date(l.start).getTime() + new Date(l.end).getTime()) / 2
+            ).toISOString(),
+            0.97,
+          ],
+          itemStyle: {
+            color: l.color ?? "#993C1D",
+            // hollow while it is only a proposal, filled once someone decides
+            opacity: l.review_status === "proposed" ? 0.55 : 1,
+            borderColor: l.color ?? "#993C1D",
+            borderWidth: 1.5,
+          },
+        })),
+        emphasis: { scale: 1.7 },
+        tooltip: {
+          trigger: "item",
+          formatter: (p: any) => {
+            const l = labels[p.dataIndex];
+            if (!l) return "";
+            const when = new Date(l.start).toISOString().slice(0, 16).replace("T", " ");
+            return (
+              `<div style="font-weight:600">${l.taxonomy_name ?? l.label_class}</div>` +
+              `<div style="opacity:.75">${when} &middot; ${l.review_status}</div>` +
+              (l.note ? `<div style="opacity:.75">${l.note}</div>` : "") +
+              `<div style="opacity:.6;margin-top:4px">click to zoom</div>`
+            );
+          },
+        },
+      } as any);
+    }
 
     const usesRight = Object.values(axisFor).includes(1);
 
@@ -335,6 +423,7 @@ export function TelemetryChart({
           bottom: compact ? 30 : 86,
         },
         legend: {
+          // the flag series is deliberately absent: it is chrome, not a channel
           data: series.map((s) => s.mnemonic),
           textStyle: { color: muted },
           top: 0,
@@ -413,6 +502,16 @@ export function TelemetryChart({
             nameTextStyle: { color: muted, align: "right" },
             splitLine: { show: false },
             axisLabel: { color: muted },
+          },
+          // A hidden 0-1 lane for the flag markers. Pinning them to a fixed
+          // fraction of the plot keeps them at the top regardless of what the
+          // data axis is doing, so they never wander into the signal.
+          {
+            type: "value",
+            min: 0,
+            max: 1,
+            show: false,
+            axisPointer: { show: false },
           },
         ],
         // filterMode "filter" drops out-of-range points rather than drawing all
@@ -502,6 +601,17 @@ export function TelemetryChart({
     const zr = chart.getZr();
     zr.off("dblclick");
     if (onResetView) zr.on("dblclick", () => onResetView());
+
+    // Clicking a marker zooms to its region. ECharts routes the hit test, so
+    // no pixel arithmetic here and no guessing at how wide a target should be.
+    chart.off("click");
+    if (onLabelClick) {
+      chart.on("click", (params: any) => {
+        if (params?.seriesName !== FLAG_SERIES) return;
+        const label = labels[params.dataIndex];
+        if (label) onLabelClick(label);
+      });
+    }
   }, [
     series,
     labels,
@@ -511,6 +621,7 @@ export function TelemetryChart({
     axisFor,
     theme,
     onBrush,
+    onLabelClick,
     onZoomChange,
     onResetView,
     lookup,
