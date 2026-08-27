@@ -7,10 +7,6 @@
 --   anomaly     - an unexplained deviation needing investigation
 CREATE SCHEMA IF NOT EXISTS labels;
 
--- GiST needs btree_gist to combine a uuid column with a range column in one
--- index. Ships with Postgres as a standard extension.
-CREATE EXTENSION IF NOT EXISTS btree_gist;
-
 DO $$ BEGIN
     CREATE TYPE labels.label_class AS ENUM ('anomaly', 'off_nominal');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
@@ -53,17 +49,29 @@ CREATE INDEX IF NOT EXISTS idx_label_group_range
 CREATE INDEX IF NOT EXISTS idx_label_status
     ON labels.label (review_status, created_at DESC);
 
-INSERT INTO labels.taxonomy (label_class, code, name, description, color) VALUES
-    ('anomaly',     'unexplained_deviation', 'Unexplained deviation',
-     'Behaviour departs from expectation with no known cause', '#993C1D'),
-    ('anomaly',     'relationship_break',    'Relationship break',
-     'Two channels that normally track each other diverged',   '#B4472A'),
-    ('anomaly',     'step_change',           'Step change',
-     'Abrupt level shift with no commanded cause',             '#8A3517'),
-    ('off_nominal', 'limit_violation',       'Limit violation',
-     'Value outside its configured operating limit',           '#BA7517'),
-    ('off_nominal', 'expected_event',        'Expected event',
-     'Known operational event such as eclipse or manoeuvre',   '#C9922E'),
-    ('off_nominal', 'data_gap',              'Data gap',
-     'Loss of signal or missing telemetry',                    '#8C7A5B')
-ON CONFLICT (code) DO NOTHING;
+-- Migration 013 replaces taxonomy.label_class with allowed_classes, so this
+-- seed must be a no-op once that has run. Every migration has to stay runnable
+-- after all later migrations have been applied.
+DO $seed$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'labels' AND table_name = 'taxonomy'
+          AND column_name = 'label_class'
+    ) THEN
+        INSERT INTO labels.taxonomy (label_class, code, name, description, color) VALUES
+            ('anomaly',     'unexplained_deviation', 'Unexplained deviation',
+             'Behaviour departs from expectation with no known cause', '#993C1D'),
+            ('anomaly',     'relationship_break',    'Relationship break',
+             'Two channels that normally track each other diverged',   '#B4472A'),
+            ('anomaly',     'step_change',           'Step change',
+             'Abrupt level shift with no commanded cause',             '#8A3517'),
+            ('off_nominal', 'limit_violation',       'Limit violation',
+             'Value outside its configured operating limit',           '#BA7517'),
+            ('off_nominal', 'expected_event',        'Expected event',
+             'Known operational event such as eclipse or manoeuvre',   '#C9922E'),
+            ('off_nominal', 'data_gap',              'Data gap',
+             'Loss of signal or missing telemetry',                    '#8C7A5B')
+        ON CONFLICT (code) DO NOTHING;
+    END IF;
+END $seed$;
