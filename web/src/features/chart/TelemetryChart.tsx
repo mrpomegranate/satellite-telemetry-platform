@@ -289,6 +289,13 @@ export function TelemetryChart({
       });
     });
 
+    // A label carries channel ids; only the chart knows their mnemonics. Without
+    // this the tooltip cannot say which signal was actually scored, which is the
+    // first thing an analyst asks when two channels are plotted together.
+    const mnemonicOf = new Map(series.map((x) => [x.channel_id, x.mnemonic]));
+    const channelsOf = (l: Label) =>
+      l.channel_ids.map((id) => mnemonicOf.get(id) ?? "unknown").join(", ");
+
     // One clickable marker per flagged region. A dashed rule cannot be
     // hovered or clicked with any confidence; a symbol has a real hit area,
     // native hover emphasis and a pointer cursor, so it advertises that it
@@ -327,9 +334,13 @@ export function TelemetryChart({
           formatter: (p: any) => {
             const l = labels[p.dataIndex];
             if (!l) return "";
-            const when = new Date(l.start).toISOString().slice(0, 16).replace("T", " ");
+            const when = new Date(l.start)
+              .toISOString()
+              .slice(0, 16)
+              .replace("T", " ");
             return (
               `<div style="font-weight:600">${l.taxonomy_name ?? l.label_class}</div>` +
+              `<div style="opacity:.9">${channelsOf(l)}</div>` +
               `<div style="opacity:.75">${when} &middot; ${l.review_status}</div>` +
               (l.note ? `<div style="opacity:.75">${l.note}</div>` : "") +
               `<div style="opacity:.6;margin-top:4px">click to zoom</div>`
