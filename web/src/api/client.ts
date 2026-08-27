@@ -73,26 +73,50 @@ export interface Group {
 
 export interface Label {
   id: string;
-  group_id: string;
-  channel_id?: string | null;
+  group_id: string | null;
+  channel_ids: string[];
   start: string;
   end: string;
   label_class: string;
+  scope: string;
+  tier: string;
+  /** human | model | rule | imported - what an analyst needs to know first. */
+  source: string;
   taxonomy_code?: string | null;
   taxonomy_name?: string | null;
   color?: string | null;
   review_status: string;
+  severity?: number | null;
+  confidence?: number | null;
   note?: string | null;
+  model_name?: string | null;
+  algorithm?: string | null;
+  model_version?: number | null;
+  proposed_by_version?: string | null;
+  detection_run_id?: string | null;
+  ruleset_id?: string | null;
+  author_id?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  promoted_by?: string | null;
+  promoted_at?: string | null;
   created_at: string;
 }
 
+/**
+ * Migration 013 dropped taxonomy.label_class: the same event type can be an
+ * anomaly or an expected nominal event depending on context, so an entry
+ * declares which classes it may carry rather than belonging to one.
+ */
 export interface TaxonomyItem {
   id: string;
-  label_class: string;
   code: string;
   name: string;
+  allowed_classes: string[];
+  parent_code?: string | null;
   description?: string | null;
   color?: string | null;
+  approved: boolean;
 }
 
 async function get<T>(path: string): Promise<T> {
@@ -109,6 +133,16 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${path}`);
   return res.status === 204 ? (undefined as T) : res.json();
+}
+
+async function patch<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}: ${path}`);
+  return res.json();
 }
 
 export const api = {
@@ -142,6 +176,8 @@ export const api = {
   groups: (satelliteId?: string) =>
     get<Group[]>(`/groups${satelliteId ? `?satellite_id=${satelliteId}` : ""}`),
 
+  group: (groupId: string) => get<Group>(`/groups/${groupId}`),
+
   createGroup: (payload: {
     satellite_id: string;
     name: string;
@@ -151,10 +187,29 @@ export const api = {
 
   taxonomy: () => get<TaxonomyItem[]>("/labels/taxonomy"),
 
-  labels: (groupId: string, start?: string, end?: string) => {
+  labels: (
+    groupId: string,
+    start?: string,
+    end?: string,
+    opts?: {
+      source?: string;
+      review_status?: string;
+      tier?: string;
+      taxonomy_code?: string;
+      algorithm?: string;
+      min_confidence?: number;
+    }
+  ) => {
     const qs = new URLSearchParams({ group_id: groupId });
     if (start) qs.set("start", start);
     if (end) qs.set("end", end);
+    if (opts?.source) qs.set("source", opts.source);
+    if (opts?.review_status) qs.set("review_status", opts.review_status);
+    if (opts?.tier) qs.set("tier", opts.tier);
+    if (opts?.taxonomy_code) qs.set("taxonomy_code", opts.taxonomy_code);
+    if (opts?.algorithm) qs.set("algorithm", opts.algorithm);
+    if (opts?.min_confidence != null)
+      qs.set("min_confidence", String(opts.min_confidence));
     return get<Label[]>(`/labels?${qs}`);
   },
 
@@ -163,7 +218,18 @@ export const api = {
     start: string;
     end: string;
     label_class: string;
-    taxonomy_code?: string;
+    taxonomy_code: string;
+    channel_ids: string[];
+    scope?: string;
+    severity?: number;
     note?: string;
+    missed?: boolean;
   }) => post<Label>("/labels", payload),
+
+  reviewLabel: (
+    labelId: string,
+    review_status: "accepted" | "rejected",
+    note?: string
+  ) =>
+    patch<Label>(`/labels/${labelId}/review`, { review_status, note }),
 };
