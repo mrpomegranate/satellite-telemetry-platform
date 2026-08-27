@@ -167,6 +167,10 @@ Two processes, two terminals.
 ```bash
 uv run uvicorn api.main:app --reload --port 8000
 ```
+or
+```
+uv run python -m uvicorn api.main:app --reload --port 8000
+```
 
 Check <http://127.0.0.1:8000/health> — it should return
 `{"status":"ok","db":true}`. Interactive docs at
